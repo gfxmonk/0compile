@@ -50,6 +50,7 @@ For a full tutorial, see 0compile's homepage.</description>
       <version not-before="2.1"/>
       <executable-in-var command="0install" name="0COMPILE_0INSTALL"/>
       <environment insert="" mode="replace" name="0COMPILE_ZEROINSTALL"/>
+      <environment insert="" mode="prepend" name="PYTHONPATH"/>
     </requires>
     <requires interface="http://repo.roscidus.com/utils/bash" os="Windows">
       <executable-in-var name="0COMPILE_BASH"/>
