@@ -288,7 +288,7 @@ class SelectionsAutoCompiler():
 		self.built_interfaces.add(iface_uri)
 
 	def note(self, msg):
-		print msg
+		print >> sys.stderr, msg
 
 def spawn_build_process():
 	try:
@@ -433,10 +433,10 @@ class AutoCompiler:
 		self.note((' %s ' % msg).center(76, '='))
 
 	def note(self, msg):
-		print msg
+		print >> sys.stderr, msg
 
 	def note_error(self, msg):
-		print msg
+		print >> sys.stderr, msg
 
 class GUIHandler(handler.Handler):
 	def downloads_changed(self):
