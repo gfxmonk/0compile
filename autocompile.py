@@ -390,7 +390,7 @@ class AutoCompiler:
 
 			if not needed:
 				self.note("No dependencies need compiling... compile %s itself..." % iface.get_name())
-				build = self.compile_and_register(d.solver.selections,
+				build = compile_and_register(self, d.solver.selections,
 						# force the interface in the recursive case
 						iface_uri if iface_uri != self.iface_uri else None)
 				yield build
