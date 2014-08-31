@@ -5,6 +5,7 @@ import sys, os, __main__, tempfile, subprocess, signal, shutil
 from xml.dom import minidom
 from optparse import OptionParser
 from logging import warn
+from collections import defaultdict
 
 from zeroinstall import SafeException
 from zeroinstall.injector import arch, handler, driver, requirements, model, iface_cache, namespaces, writer, reader, qdom, selections
@@ -30,6 +31,29 @@ assert build_target_machine_type in arch.machine_ranks, "Build target machine ty
 arch.machine_groups['newbuild'] = arch.machine_groups.get(build_target_machine_type, 0)
 arch.machine_ranks['newbuild'] = max(arch.machine_ranks.values()) + 1
 host_arch = '*-newbuild'
+
+def first(iterable): return next(iter(iterable))
+
+def selection_dependencies(self, selection):
+	def is_dep(dep):
+		if isinstance(dep, model.InterfaceDependency):
+			return True
+		else:
+			self.note("Ignoring non-dependency requirement: %r" % (dep,))
+			return False
+
+	def deps():
+		# toplevel deps
+		for dep in selection.dependencies:
+			yield dep
+
+		# command-specific deps
+		for cmd in selection.get_commands().values():
+			for dep in cmd.requires:
+				yield dep
+
+	return filter(is_dep, deps())
+
 
 class ImplRestriction(model.Restriction):
 	reason = "Not the source we're trying to build"
@@ -121,7 +145,7 @@ class AutocompileCache(iface_cache.IfaceCache):
 		return feed
 
 @tasks.async
-def compile_and_register(self, sels, forced_iface_uri = None):
+def compile_and_register(self, sels, forced_iface_uri = None, impl_hook = None):
 	"""If forced_iface_uri, register as an implementation of this interface,
 	ignoring the any <feed-for>, etc."""
 
@@ -214,6 +238,14 @@ def compile_and_register(self, sels, forced_iface_uri = None):
 		# Write it out - 0install will add the feed so that older 0install versions can find it
 		writer.save_interface(iface)
 
+		# We may want to use the just-built implementation in further build steps
+		if impl_hook:
+			built_feed = reader.load_feed(local_feed, local=True)
+			impls = built_feed.implementations
+			assert len(impls) == 1, "Expected 1 compiled implementation, got %s" % (len(impls),)
+			impl = first(impls.values())
+			impl_hook(impl)
+
 		seen_key = (forced_iface_uri, sels.selections[sels.interface].id)
 		assert seen_key not in self.seen, seen_key
 		self.seen[seen_key] = site_package_dir
@@ -226,19 +258,13 @@ def compile_and_register(self, sels, forced_iface_uri = None):
 
 		ro_rmtree(tmpdir)
 
-def dependency_interfaces(selection):
-	for dep in selection.dependencies:
-		if not hasattr(dep, 'interface'):
-			self.note("Ignoring non-interface dependency: %r" % (dep,))
-			continue
-		yield dep.interface
-
 class SelectionsAutoCompiler():
 	def __init__(self, config, path, options):
 		self.options = options
 		self.config = config
 		self.seen_interfaces = set()
 		self.built_interfaces = set()
+		self.required_commands = defaultdict(lambda: set())
 		self.selections = reader.load_feed(path, local=True, selections_ok = True)
 		assert isinstance(self.selections, selections.Selections), "Not a selections document"
 
@@ -267,22 +293,49 @@ class SelectionsAutoCompiler():
 
 		selection = self.selections.selections.get(iface_uri)
 		arch = selection.attrs.get('arch', '*-*').split('-', 1)[1]
-		for dep_iface in dependency_interfaces(selection):
-			build = self.recursive_build(dep_iface)
+
+		impl_sels = selections.Selections(None)
+		impl_sels.interface = iface_uri
+		impl_sels.command = "compile"
+		impl_sels.selections[iface_uri] = selection
+
+		for dep in selection_dependencies(self, selection):
+			# accumulate used commands per-interface
+			self.required_commands[dep.interface] = self.required_commands[dep.interface].union(
+					dep.get_required_commands())
+
+			if dep.interface == iface_uri:
+				# skip self-deps
+				continue
+
+			build = self.recursive_build(dep.interface)
 			yield build
 			tasks.check(build)
+
+			impl_sels.selections[dep.interface] = self.selections[dep.interface]
 
 		# dependencies built - now do what we came here for
 		mode = selection.attrs.get('mode', 'immediate')
 		if mode == 'requires_compilation':
-			self.note("compiling %s... " % (iface_uri,))
-			impl_sels = selections.Selections(None)
-			impl_sels.interface = iface_uri
-			impl_sels.command = "compile"
-			impl_sels.selections = self.selections.selections.copy()
-			build = compile_and_register(self, impl_sels, iface_uri)
+			self.note("compiling %s..." % (iface_uri,))
+
+			# Once built, replace the selection in self.selections so that
+			# anything depending on this will see the built version
+			def use_implementation(impl):
+				new_selection = selections.ImplSelection(iface_uri, impl, impl.dependencies)
+
+				# XXX we're mutating the return value of sel.get_commands(),
+				# which happens to work but feels fragile...
+				selected_commands = new_selection.get_commands()
+				for command_name in self.required_commands[iface_uri]:
+					selected_commands[command_name] = impl.commands[command_name]
+
+				self.selections.selections[iface_uri] = new_selection
+
+			build = compile_and_register(self, impl_sels, iface_uri, impl_hook=use_implementation)
 			yield build
 			tasks.check(build)
+
 		elif mode == 'immediate':
 			self.note("interface %s does not need compilation" % (iface_uri,))
 		else:
