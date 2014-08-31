@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from __future__ import print_function
 import sys, tempfile, os, shutil, tempfile, subprocess
 from StringIO import StringIO
 import unittest
@@ -21,6 +22,7 @@ local_bad_version = os.path.join(mydir, 'bad-version.xml')
 local_hello_path = os.path.join(mydir, 'hello2', 'hello2.xml')
 local_cprog_command_path = os.path.join(mydir, 'cprog', 'cprog-command.xml')
 local_cprog_path = os.path.join(mydir, 'cprog', 'cprog.xml')
+local_requires_hello_path = os.path.join(mydir, 'requires-hello', 'requires-hello.xml')
 local_pinned_path = os.path.join(mydir, 'pinned-version', 'pinned-version.xml')
 top_build_deps = os.path.join(mydir, 'top-build-deps.xml')
 
@@ -30,10 +32,11 @@ assert os.path.exists(compile_bin)
 if 'DISPLAY' in os.environ:
 	del os.environ['DISPLAY']
 
-launch_command = [os.environ['0COMPILE_0LAUNCH']]
+zi_command = [os.environ['0COMPILE_TEST_0INSTALL']]
+launch_command = zi_command + ['run']
 
 # Ensure it's cached now, to avoid extra output during the tests
-if subprocess.call(launch_command + ['--source', '-c', '--download-only', hello_uri]):
+if subprocess.call(zi_command + ['download', '--source', '-c', hello_uri]):
 	raise Exception("Failed to download hello world test program")
 
 def compile(*args, **kwargs):
@@ -42,7 +45,11 @@ def compile(*args, **kwargs):
 def run(*args, **kwargs):
 	if not isinstance(args[0], basestring):
 		args = args[0] + list(args[1:])
-	child = subprocess.Popen(args, stdout = subprocess.PIPE, stderr = subprocess.STDOUT)
+
+	stdout = kwargs.get('stdout', subprocess.PIPE)
+	stderr = kwargs.get('stderr', subprocess.STDOUT)
+
+	child = subprocess.Popen(args, stdout = stdout, stderr = stderr)
 	got, unused = child.communicate()
 	code = child.wait()
 	if code != kwargs.get('expect_status', 0):
@@ -51,8 +58,25 @@ def run(*args, **kwargs):
 	expected = kwargs.get('expect', '')
 	if expected is not None: # pass None to explicily suppress check
 		if expected:
-			if expected.lower() not in got.lower():
-				raise Exception("Expected '%s', got '%s'" % (expected, got))
+			if isinstance(expected, list):
+				# if we're given a list of lines, check
+				# that each of them appear in that order:
+				remaining_lines = got.splitlines()
+				for expected_line in expected:
+					tested_lines = []
+					while True:
+						try:
+							candidate = remaining_lines.pop(0)
+						except IndexError:
+							raise Exception("Couldn\'t fine line '%s' in lines:\n %s" %
+									(expected_line, '\n'.join(tested_lines)))
+						tested_lines.append(candidate)
+						if candidate == expected_line:
+							break
+			else:
+				# expected is a string
+				if expected.lower() not in got.lower():
+					raise Exception("Expected '%s', got '%s'" % (expected, got))
 		elif got:
 			raise Exception("Expected nothing, got '%s'" % got)
 
@@ -132,6 +156,40 @@ class TestCompile(unittest.TestCase):
 		c = config.load_config()
 		i = c.iface_cache.get_interface('http://example.com/top.xml')
 		self.assertEquals(1, len(i.extra_feeds))
+	
+	def testAutocompileSelections(self):
+		# register our own feed with "hello" command
+		# (and a proper compile:implementation, rather than old-style
+		# compile:command and compile:binary-main)
+		gnu_compile_uri = 'http://0install.net/tests/GNU-Hello.xml'
+		gnu_compile_override = os.path.join(mydir, 'requires-hello', 'gnu-hello.xml')
+		run(zi_command, 'add-feed',
+			gnu_compile_uri,
+			gnu_compile_override
+		)
+
+		run(zi_command, 'list-feeds', gnu_compile_uri, expect=gnu_compile_override)
+
+		sels_path = os.path.join(self.tmpdir, 'source-sels.xml')
+		with open(sels_path, 'w') as sels:
+			run(zi_command, 'select', '--xml', '--compile', local_requires_hello_path, stdout=sels, expect=None)
+
+		# with open(sels_path) as sels:
+		# 	print("SELS:", sels.read(), file=sys.stderr)
+
+		compile('autocompile', '--selections', sels_path, expect = [
+			'compiling http://0install.net/tests/GNU-Hello.xml...',
+			'compiling %s...' % local_requires_hello_path,
+			'Running just-built `hello`:',
+			'Hello, world!',
+		])
+
+		# Result was registered:
+		run(launch_command, '--no-compile', local_requires_hello_path, expect = 'Hello from Bash')
+
+		# Dependency was also registered
+		run(launch_command, '--no-compile', '--command=hello', gnu_compile_uri, expect = 'Hello, world!')
+
 
 	def testLocal(self):
 		compile('setup', local_hello_path, self.hello_dir, expect = 'Created directory')

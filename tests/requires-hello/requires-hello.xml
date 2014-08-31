@@ -1,0 +1,35 @@
+<?xml version="1.0" ?>
+<interface xmlns="http://zero-install.sourceforge.net/2004/injector/interface" xmlns:compile="http://zero-install.sourceforge.net/2006/namespaces/0compile">
+  <name>requires-cprog</name>
+  <summary>testing</summary>
+  <description>
+    Test compiling a program which depends on another source program
+  </description>
+
+  <feed-for interface='http://example.com/requires-cprog.xml'/>
+
+  <group arch="*-src" license='Public Domain'>
+    <implementation id="." version="0.1">
+      <command name='compile'>
+        <requires interface="http://0install.net/tests/GNU-Hello.xml">
+          <executable-in-var name="CPROG_CMD" command="hello"/>
+        </requires>
+        <runner interface='http://repo.roscidus.com/utils/bash'>
+          <arg>-euxc</arg>
+          <arg>
+            echo 'Running just-built `hello`:'
+            $CPROG_CMD
+            cp "$SRCDIR/main" "$DISTDIR/main"
+            chmod a+x "$DISTDIR/main"
+          </arg>
+        </runner>
+        <compile:implementation>
+          <command name="run" path="main">
+            <runner interface='http://repo.roscidus.com/utils/bash'/>
+           </command>
+        </compile:implementation>
+      </command>
+    </implementation>
+  </group>
+</interface>
+
