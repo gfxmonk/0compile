@@ -34,26 +34,39 @@ host_arch = '*-newbuild'
 
 def first(iterable): return next(iter(iterable))
 
-def selection_dependencies(self, selection):
+def recursive_selection_dependencies(self, selections, iface_uri):
 	def is_dep(dep):
 		if isinstance(dep, model.InterfaceDependency):
 			return True
 		else:
 			self.note("Ignoring non-dependency requirement: %r" % (dep,))
 			return False
-
-	def deps():
-		# toplevel deps
+	
+	def direct_dependencies(selection):
 		for dep in selection.dependencies:
 			yield dep
 
 		# command-specific deps
-		for cmd in selection.get_commands().values():
+		for name, cmd in selection.get_commands().items():
 			for dep in cmd.requires:
 				yield dep
 
-	return filter(is_dep, deps())
+	seen = set()
+	def walk(iface_uri):
+		# toplevel deps
+		if iface_uri in seen: return
+		seen.add(iface_uri)
 
+		# self.note("PROCESS: %s" % iface_uri)
+		selection = selections[iface_uri]
+
+		for dep in filter(is_dep, direct_dependencies(selection)):
+			for nested_dep in walk(dep.interface):
+				yield nested_dep
+			yield dep
+
+	for dep in walk(iface_uri):
+		yield dep
 
 class ImplRestriction(model.Restriction):
 	reason = "Not the source we're trying to build"
@@ -299,7 +312,7 @@ class SelectionsAutoCompiler():
 		impl_sels.command = "compile"
 		impl_sels.selections[iface_uri] = selection
 
-		for dep in selection_dependencies(self, selection):
+		for dep in recursive_selection_dependencies(self, self.selections, iface_uri):
 			# accumulate used commands per-interface
 			self.required_commands[dep.interface] = self.required_commands[dep.interface].union(
 					dep.get_required_commands())
