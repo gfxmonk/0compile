@@ -151,7 +151,11 @@ class AutoCompiler:
 		if impl:
 			indent = '  ' + indent
 			for x in impl.requires:
-				self.pretty_print_plan(solver, x.interface, indent)
+				try:
+					self.pretty_print_plan(solver, x.interface, indent)
+				except KeyError:
+					# XXX this is hacky, hopefully there's a better upstream fix soon...
+					pass
 
 	def print_details(self, solver):
 		"""Dump debugging details."""
